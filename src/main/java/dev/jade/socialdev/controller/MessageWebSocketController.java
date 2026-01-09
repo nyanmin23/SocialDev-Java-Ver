@@ -12,12 +12,17 @@ import org.springframework.stereotype.Controller;
 @Controller
 @RequiredArgsConstructor
 public class MessageWebSocketController {
+    // MessageMapping -
+    // https://stackoverflow.com/questions/52999004/subscribemapping-vs-messagemapping
+
 
     // This is apparently used for sending message to specific user.
     private final SimpMessagingTemplate simpMessagingTemplate;
     private final MessageService messageService;
 
+    // react only to the SEND messages with the destination having prefix /app and matching the topic set in the annotation.
     @MessageMapping("/message")
+    // send to specified destination (if message contains destination, it will take precedence over this specified destination)
     @SendTo("/topic/public")
     public Message sendMessage(@Payload Message message) {
         return messageService.handleMessage(message);
