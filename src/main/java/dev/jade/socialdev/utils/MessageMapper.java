@@ -5,9 +5,10 @@ import dev.jade.socialdev.model.Message;
 import lombok.experimental.UtilityClass;
 
 @UtilityClass
-public final class MessageMapper {
+public class MessageMapper {
 
     public static Message mapToMessage(MessageEntity messageEntity) {
+
         Message message = new Message();
         message.setMessageId(messageEntity.getId());
         message.setSenderId(messageEntity.getSender().getId());
@@ -19,6 +20,7 @@ public final class MessageMapper {
         }
         message.setContent(messageEntity.getContent());
         message.setCreatedAt(messageEntity.getCreatedAt());
+
         return message;
     }
 

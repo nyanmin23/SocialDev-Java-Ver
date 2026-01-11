@@ -7,12 +7,16 @@ import dev.jade.socialdev.exception.UsernameAlreadyTakenException;
 import dev.jade.socialdev.model.User;
 import dev.jade.socialdev.repository.UserRepository;
 import dev.jade.socialdev.service.contract.AuthService;
+import dev.jade.socialdev.utils.UserMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 
+/**
+ * Implementation of AuthService for handling user authentication operations.
+ */
 @Service
 @RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
@@ -27,7 +31,7 @@ public class AuthServiceImpl implements AuthService {
         }
 
         UserEntity saved = userRepository.save(createUserEntity(username, password));
-        return mapToUser(saved);
+        return UserMapper.mapToUser(saved);
     }
 
     @Override
@@ -39,10 +43,16 @@ public class AuthServiceImpl implements AuthService {
             throw new InvalidCredentialsException("Invalid password");
         }
 
-        return mapToUser(userEntity);
+        return UserMapper.mapToUser(userEntity);
     }
 
-
+    /**
+     * Creates a new UserEntity with encoded password.
+     *
+     * @param username the username
+     * @param password the raw password to encode
+     * @return the created UserEntity
+     */
     private UserEntity createUserEntity(String username, String password) {
         UserEntity userEntity = new UserEntity();
         userEntity.setUsername(username);
@@ -50,14 +60,5 @@ public class AuthServiceImpl implements AuthService {
         userEntity.setCreatedAt(Instant.now());
 
         return userEntity;
-    }
-
-    private User mapToUser(UserEntity userEntity) {
-        User user = new User();
-        user.setUserId(userEntity.getId());
-        user.setUsername(userEntity.getUsername());
-        user.setCreatedAt(userEntity.getCreatedAt());
-
-        return user;
     }
 }

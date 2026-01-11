@@ -1,8 +1,9 @@
 package dev.jade.socialdev.controller;
 
 import dev.jade.socialdev.model.Message;
-import dev.jade.socialdev.service.UserService;
+import dev.jade.socialdev.service.UserServiceImpl;
 import dev.jade.socialdev.service.contract.MessageService;
+import dev.jade.socialdev.service.contract.UserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;

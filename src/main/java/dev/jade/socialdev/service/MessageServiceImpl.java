@@ -19,6 +19,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class MessageServiceImpl implements MessageService {
 
+    private static final int MAX_CONTENT_LENGTH = 1000;
 
     private final MessageRepository messageRepository;
     private final UserRepository userRepository;
@@ -55,15 +56,20 @@ public class MessageServiceImpl implements MessageService {
     @Override
     public List<Message> getPrivateMessagesForUser(Long senderId, Long recipientId) {
         return messageRepository
-                .findAllBySender_IdAndRecipient_IdOrSender_IdAndRecipient_IdOrderByCreatedAtAsc(
-                        senderId, recipientId,
-                        recipientId, senderId
-                )
+                .findPrivateMessagesBetweenUsers(senderId, recipientId)
                 .stream()
                 .map(MessageMapper::mapToMessage)
                 .toList();
     }
 
+    /**
+     * Creates a new MessageEntity.
+     *
+     * @param sender    the sender user
+     * @param recipient the recipient user (null for public messages)
+     * @param content   the message content
+     * @return the created MessageEntity
+     */
     private MessageEntity createMessageEntity(
             UserEntity sender,
             UserEntity recipient,
@@ -78,6 +84,13 @@ public class MessageServiceImpl implements MessageService {
         return messageEntity;
     }
 
+    /**
+     * Validates and normalizes message content.
+     *
+     * @param incomingMessage the incoming message to validate
+     * @return normalized content
+     * @throws IllegalArgumentException if content is invalid
+     */
     private String validateMessage(IncomingMessage incomingMessage) {
         String content = incomingMessage.getContent();
         if (content == null) {
@@ -89,14 +102,12 @@ public class MessageServiceImpl implements MessageService {
             throw new IllegalArgumentException("Message content must not be empty");
         }
 
-        int maxContentLength = 1000;
-        if (content.length() > maxContentLength) {
+        if (content.length() > MAX_CONTENT_LENGTH) {
             throw new IllegalArgumentException(
-                    "Message length can't exceed " + maxContentLength + " characters"
+                    "Message length can't exceed " + MAX_CONTENT_LENGTH + " characters"
             );
         }
 
         return content;
     }
-
 }

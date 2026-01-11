@@ -21,8 +21,16 @@ import java.util.Collections;
 @RequestMapping("/api/auth")
 @RequiredArgsConstructor
 public class AuthController {
+
     private final AuthService authService;
 
+    /**
+     * Registers a new user and establishes a session.
+     *
+     * @param request the registration request containing username and password
+     * @param session the HTTP session
+     * @return the created user
+     */
     @PostMapping("/register")
     public User registerUser(@Valid @RequestBody AuthRequest request, HttpSession session) {
         User user = authService.register(request.username(), request.password());
@@ -30,6 +38,13 @@ public class AuthController {
         return user;
     }
 
+    /**
+     * Authenticates a user and establishes a session.
+     *
+     * @param request the login request containing username and password
+     * @param session the HTTP session
+     * @return the authenticated user
+     */
     @PostMapping("/login")
     public User loginUser(@Valid @RequestBody AuthRequest request, HttpSession session) {
         User user = authService.login(request.username(), request.password());
@@ -37,6 +52,12 @@ public class AuthController {
         return user;
     }
 
+    /**
+     * Establishes authentication context and session for the user.
+     *
+     * @param user    the authenticated user
+     * @param session the HTTP session
+     */
     private void authenticateUser(User user, HttpSession session) {
         UsernamePasswordAuthenticationToken authentication =
                 new UsernamePasswordAuthenticationToken(
@@ -53,7 +74,5 @@ public class AuthController {
                 HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY,
                 securityContext
         );
-        session.setAttribute("userId", user.getUserId());
-        session.setAttribute("username", user.getUsername());
     }
 }
