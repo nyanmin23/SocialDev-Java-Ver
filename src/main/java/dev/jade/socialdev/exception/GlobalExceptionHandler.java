@@ -8,9 +8,6 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import java.util.Map;
 
-/**
- * Centralizes exception handling to provide consistent error responses.
- */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 

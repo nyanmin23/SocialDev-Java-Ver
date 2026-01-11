@@ -16,11 +16,6 @@ public class UserController {
 
     private final UserService userService;
 
-    /**
-     * Retrieves all registered users.
-     *
-     * @return list of all users
-     */
     @GetMapping
     public List<User> getAllUsers() {
         return userService.getAllUsers();

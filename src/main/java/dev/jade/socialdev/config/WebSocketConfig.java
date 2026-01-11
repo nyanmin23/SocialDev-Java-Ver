@@ -26,17 +26,24 @@ import java.util.Map;
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     @Override
     public void configureMessageBroker(MessageBrokerRegistry registry) {
-        // https://docs.spring.io/spring-framework/docs/5.0.2.RELEASE/kdoc-api/spring-framework/org.springframework.messaging.simp.config/-message-broker-registry/index.html
+
+        /**
+         * Refer to <a href="https://docs.spring.io/spring-framework/docs/5.0.2.RELEASE/kdoc-api/spring-framework/org.springframework.messaging.simp.config/-message-broker-registry/index.html">Spring Framework Docs</a>
+         */
 
         // configure prefixes to filter destinations to target the broker
         registry.enableSimpleBroker("/topic", "/queue");
 
         // STOMP messages whose destination header begins with /app are routed to
         // @MessageMapping methods in @Controller classes (at Server end)
-        // https://stackoverflow.com/questions/38323193/what-is-setapplicationdestinationprefixes-being-used-for
+        /**
+         * @see <a href="https://stackoverflow.com/questions/38323193/what-is-setapplicationdestinationprefixes-being-used-for">What is setApplicationDestinationPrefixes()?</a>
+         */
         registry.setApplicationDestinationPrefixes("/app");
 
-        // https://docs.spring.io/spring-framework/docs/5.0.2.RELEASE/kdoc-api/spring-framework/org.springframework.messaging.simp.config/-message-broker-registry/set-user-destination-prefix.html
+        /**
+         * @see <a href="https://docs.spring.io/spring-framework/docs/5.0.2.RELEASE/kdoc-api/spring-framework/org.springframework.messaging.simp.config/-message-broker-registry/set-user-destination-prefix.html">What does setUserDestinationPrefix() do?</a>
+         */
         registry.setUserDestinationPrefix("/user");
     }
 
@@ -51,7 +58,10 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     public void configureClientInboundChannel(ChannelRegistration registration) {
         registration.interceptors(new ChannelInterceptor() {
 
-            // https://docs.spring.io/spring-framework/reference/web/websocket/stomp/interceptors.html
+            /**
+             * @see <a href="https://docs.spring.io/spring-framework/reference/web/websocket/stomp/interceptors.html">STOMP Interceptor</a>
+             */
+
             @Override
             public Message<?> preSend(Message<?> message, MessageChannel channel) {
                 StompHeaderAccessor accessor =

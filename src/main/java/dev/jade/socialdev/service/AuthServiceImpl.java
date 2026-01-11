@@ -14,9 +14,6 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 
-/**
- * Implementation of AuthService for handling user authentication operations.
- */
 @Service
 @RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
