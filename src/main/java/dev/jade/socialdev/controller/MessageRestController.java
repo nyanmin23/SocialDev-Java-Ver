@@ -1,23 +1,37 @@
 package dev.jade.socialdev.controller;
 
 import dev.jade.socialdev.model.Message;
+import dev.jade.socialdev.service.UserService;
 import dev.jade.socialdev.service.contract.MessageService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.security.Principal;
 import java.util.List;
 
 @RestController
 @RequiredArgsConstructor
-@RequestMapping("/api")
+@RequestMapping("/api/messages")
 public class MessageRestController {
 
     private final MessageService messageService;
+    private final UserService userService;
 
-    @GetMapping("messages")
-    public List<Message> displayMessages() {
-        return messageService.getMessages();
+    @GetMapping("/public")
+    public List<Message> displayPublicMessages() {
+        return messageService.getPublicMessages();
+    }
+
+    @GetMapping("/private/{recipientId}")
+    public List<Message> getConversation(
+            @PathVariable Long recipientId,
+            Principal principal
+    ) {
+        Long senderId = userService.getCurrentUserId(principal);
+        return messageService.getPrivateMessagesForUser(senderId, recipientId);
     }
 }
+

@@ -3,20 +3,403 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>Homepage</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SocialDev Chat</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.6.1/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
 </head>
 
-<body>
-    <h1>SocialDev Chat</h1>
-    <input id="username" type="text" placeholder="Username">
-    <input id="password" type="password" placeholder="Password">
-    <button id="connect">Login</button>
-    <button id="send">Send</button>
-    <input id="message" type="text" placeholder="Message">
-    <ul id="messages"></ul>
-    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
-    <script src="/app.js"></script>
+<body class="bg-gray-100">
+    <div id="app"></div>
+
+    <script>
+        const API_URL = 'http://localhost:8080/api';
+        const WS_URL = 'http://localhost:8080/ws-socialdev';
+
+        let user = null;
+        let stompClient = null;
+        let publicMessages = [];
+        let privateChats = {};
+        let users = [];
+        let selectedUser = null;
+        let activeTab = null;
+
+        // Load cached users on startup (prevents empty list flash)
+        try {
+            const cachedUsers = localStorage.getItem('socialdev_users');
+            if (cachedUsers) {
+                users = JSON.parse(cachedUsers);
+            }
+        } catch (e) {
+            console.error("Cache error", e);
+        }
+
+        // Initialize
+        window.onload = () => {
+            const savedUser = localStorage.getItem('socialdev_user');
+            if (savedUser) {
+                user = JSON.parse(savedUser);
+                // If we have cached users, filter out the current user immediately
+                // to avoid seeing yourself in the list after a reload
+                if (users.length > 0) {
+                    users = users.filter(u => u.userId !== user.userId);
+                }
+                connectWebSocket();
+            } else {
+                renderAuth();
+            }
+        };
+
+        function connectWebSocket() {
+            const socket = new SockJS(WS_URL);
+            stompClient = Stomp.over(socket);
+
+            stompClient.connect({}, async () => {
+                console.log('Connected to WebSocket');
+
+                // We now AWAIT both loads before rendering
+                await Promise.all([loadPublicMessages(), loadUsers()]);
+
+                // Now that data is definitely here, we render
+                renderChat();
+
+                stompClient.subscribe('/topic/public', (message) => {
+                    const msg = JSON.parse(message.body);
+                    publicMessages.push(msg);
+                    if (activeTab === 'public') renderMessages();
+                });
+
+                stompClient.subscribe('/user/queue/private', (message) => {
+                    const msg = JSON.parse(message.body);
+                    const otherUserId = msg.senderId === user.userId ? msg.recipientId : msg.senderId;
+
+                    if (!privateChats[otherUserId]) {
+                        privateChats[otherUserId] = [];
+                    }
+                    privateChats[otherUserId].push(msg);
+
+                    if (activeTab === 'private' && selectedUser && selectedUser.userId === otherUserId) {
+                        renderMessages();
+                    }
+                });
+            });
+        }
+
+        async function handleAuth(isLogin) {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const errorDiv = document.getElementById('error');
+
+            errorDiv.textContent = '';
+
+            try {
+                const endpoint = isLogin ? '/auth/login' : '/auth/register';
+                const response = await fetch(`${API_URL}${endpoint}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ username, password })
+                });
+
+                if (!response.ok) {
+                    // Parse JSON error to avoid showing stack trace
+                    const text = await response.text();
+                    try {
+                        const data = JSON.parse(text);
+                        // If backend sends specific 'message' field, use it.
+                        if (data.message) throw new Error(data.message);
+                        if (data.error && data.error !== "Internal Server Error") throw new Error(data.error);
+
+                        // If it's a 500 Internal Server Error, check trace for specific exceptions
+                        if (data.trace && data.trace.includes("UserNotFoundException")) {
+                            throw new Error("User not found");
+                        }
+                        if (data.trace && data.trace.includes("InvalidCredentialsException")) {
+                            throw new Error("Invalid password");
+                        }
+                        if (data.trace && data.trace.includes("UsernameAlreadyTakenException")) {
+                            throw new Error("Username already taken");
+                        }
+                    } catch (e) {
+                        // If JSON parse failed or we just threw a clean error above, re-throw it
+                        if (e.message !== "Unexpected token") throw e;
+                    }
+                    // Fallback if JSON parsing fails completely or no specific error found
+                    throw new Error(isLogin ? "Login failed" : "Registration failed");
+                }
+
+                user = await response.json();
+                localStorage.setItem('socialdev_user', JSON.stringify(user));
+
+                activeTab = null;
+                selectedUser = null;
+
+                connectWebSocket();
+            } catch (err) {
+                errorDiv.textContent = err.message;
+            }
+        }
+
+        async function loadPublicMessages() {
+            try {
+                const response = await fetch(`${API_URL}/messages/public`, {
+                    credentials: 'include'
+                });
+                publicMessages = await response.json();
+            } catch (err) {
+                console.error('Failed to load public messages:', err);
+            }
+        }
+
+        async function loadUsers() {
+            try {
+                const response = await fetch(`${API_URL}/users`, {
+                    credentials: 'include'
+                });
+                if (!response.ok) throw new Error('Failed to load');
+
+                const allUsers = await response.json();
+                // Filter out current user
+                users = allUsers.filter(u => u.userId !== user.userId);
+
+                // Save to cache
+                localStorage.setItem('socialdev_users', JSON.stringify(users));
+            } catch (err) {
+                console.error('Failed to load users:', err);
+                // Fallback to cache
+                const cached = localStorage.getItem('socialdev_users');
+                if (cached) {
+                    const allCached = JSON.parse(cached);
+                    users = allCached.filter(u => u.userId !== user.userId);
+                }
+            }
+        }
+
+        async function loadPrivateMessages(recipientId) {
+            try {
+                const response = await fetch(`${API_URL}/messages/private/${recipientId}`, {
+                    credentials: 'include'
+                });
+                privateChats[recipientId] = await response.json();
+            } catch (err) {
+                console.error('Failed to load private messages:', err);
+            }
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            if (!input) return;
+
+            const content = input.value.trim();
+            if (!content || !stompClient) return;
+
+            if (activeTab === 'public') {
+                stompClient.send('/app/message', {}, JSON.stringify({ content }));
+            } else if (selectedUser) {
+                stompClient.send('/app/private-message', {}, JSON.stringify({
+                    content,
+                    recipientId: selectedUser.userId
+                }));
+            }
+
+            input.value = '';
+        }
+
+        function logout() {
+            if (stompClient) stompClient.disconnect();
+
+            // Clear everything
+            user = null;
+            users = [];
+            publicMessages = [];
+            privateChats = {};
+            selectedUser = null;
+            activeTab = null;
+
+            localStorage.removeItem('socialdev_user');
+            localStorage.removeItem('socialdev_users'); // Clear cache
+
+            renderAuth();
+        }
+
+        async function selectUser(u) {
+            selectedUser = u;
+            activeTab = 'private';
+
+            if (!privateChats[u.userId]) {
+                await loadPrivateMessages(u.userId);
+            }
+
+            renderChat();
+        }
+
+        function renderAuth() {
+            document.getElementById('app').innerHTML = `
+            <div class="min-h-screen bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center p-4">
+                <div class="bg-white rounded-lg shadow-2xl p-8 w-full max-w-md">
+                    <h1 class="text-3xl font-bold text-center mb-6 text-gray-800">SocialDev Chat</h1>
+
+                    <div class="flex gap-2 mb-6">
+                        <button onclick="switchAuthMode(true)" id="loginBtn" class="flex-1 py-2 rounded-lg font-semibold transition bg-purple-600 text-white">
+                            Login
+                        </button>
+                        <button onclick="switchAuthMode(false)" id="registerBtn" class="flex-1 py-2 rounded-lg font-semibold transition bg-gray-200 text-gray-700">
+                            Register
+                        </button>
+                    </div>
+
+                    <div class="space-y-4">
+                        <input type="text" id="username" placeholder="Username"
+                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-600">
+                        <input type="password" id="password" placeholder="Password"
+                            onkeypress="if(event.key==='Enter') document.getElementById('authBtn').click()"
+                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-600">
+
+                        <div id="error" class="text-red-700 text-sm min-h-[20px]"></div>
+
+                        <button id="authBtn" onclick="handleAuth(true)" class="w-full bg-purple-600 text-white py-2 rounded-lg font-semibold hover:bg-purple-700 transition">
+                            Login
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+        }
+
+        function switchAuthMode(isLogin) {
+            const loginBtn = document.getElementById('loginBtn');
+            const registerBtn = document.getElementById('registerBtn');
+            const authBtn = document.getElementById('authBtn');
+
+            if (isLogin) {
+                loginBtn.className = "flex-1 py-2 rounded-lg font-semibold transition bg-purple-600 text-white";
+                registerBtn.className = "flex-1 py-2 rounded-lg font-semibold transition bg-gray-200 text-gray-700";
+                authBtn.textContent = "Login";
+                authBtn.onclick = () => handleAuth(true);
+            } else {
+                loginBtn.className = "flex-1 py-2 rounded-lg font-semibold transition bg-gray-200 text-gray-700";
+                registerBtn.className = "flex-1 py-2 rounded-lg font-semibold transition bg-purple-600 text-white";
+                authBtn.textContent = "Register";
+                authBtn.onclick = () => handleAuth(false);
+            }
+        }
+
+        function renderChat() {
+            const usersHtml = users.map(u => `
+            <button onclick='selectUser(${JSON.stringify(u)})'
+                class="w-full text-left px-3 py-2 rounded-lg mb-1 transition ${selectedUser?.userId === u.userId && activeTab === 'private'
+                    ? 'bg-purple-100 text-purple-700'
+                    : 'hover:bg-gray-100'
+                }">
+                <div class="flex items-center gap-2">
+                    <div class="w-2 h-2 bg-green-500 rounded-full"></div>
+                    ${u.username}
+                </div>
+            </button>
+        `).join('');
+
+            const showInput = activeTab === 'public' || selectedUser;
+
+            document.getElementById('app').innerHTML = `
+            <div class="min-h-screen bg-gray-100 flex">
+                <div class="w-64 bg-white border-r border-gray-200 flex flex-col">
+                    <div class="p-4 border-b border-gray-200">
+                        <h2 class="text-xl font-bold text-gray-800">SocialDev</h2>
+                        <p class="text-sm text-gray-600">@${user ? user.username : '...'}</p>
+                        <button onclick="logout()" class="mt-2 w-full bg-red-500 text-white py-1 rounded text-sm hover:bg-red-600 transition">
+                            Logout
+                        </button>
+                    </div>
+
+                    <div class="p-4 border-b border-gray-200">
+                        <button onclick="switchToPublic()" class="w-full text-left px-3 py-2 rounded-lg font-medium transition ${activeTab === 'public' ? 'bg-purple-100 text-purple-700' : 'hover:bg-gray-100'
+                }">
+                            # Public Chat
+                        </button>
+                    </div>
+
+                    <div class="flex-1 overflow-y-auto">
+                        <div class="p-4">
+                            <h3 class="text-xs font-semibold text-gray-500 uppercase mb-2">Direct Messages</h3>
+                            ${usersHtml}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex-1 flex flex-col">
+                    <div class="bg-white border-b border-gray-200 p-4">
+                        <h2 class="text-xl font-bold text-gray-800">
+                            ${activeTab === 'public'
+                    ? '# Public Chat'
+                    : (selectedUser
+                        ? `@ ${selectedUser.username}`
+                        : 'Select a chat (Public or user) to start messaging')
+                }
+                        </h2>
+                    </div>
+
+                    <div id="messages" class="flex-1 overflow-y-auto p-4 space-y-3"></div>
+
+                    <div class="bg-white border-t border-gray-200 p-4">
+                        ${showInput
+                    ? `
+                                    <div class="flex gap-2">
+                                        <input type="text" id="messageInput" placeholder="Type a message..."
+                                            onkeypress="if(event.key==='Enter') sendMessage()"
+                                            class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-600">
+                                        <button onclick="sendMessage()" class="bg-purple-600 text-white px-6 py-2 rounded-lg font-semibold hover:bg-purple-700 transition">
+                                            Send
+                                        </button>
+                                    </div>
+                                  `
+                    : `
+                                    <div class="text-center text-gray-500 py-8">
+                                        Please select a chat (Public or a user) to start messaging.
+                                    </div>
+                                  `
+                }
+                    </div>
+                </div>
+            </div>
+        `;
+
+            renderMessages();
+        }
+
+        function switchToPublic() {
+            activeTab = 'public';
+            selectedUser = null;
+            renderChat();
+        }
+
+        function renderMessages() {
+            const currentMessages = activeTab === 'public'
+                ? publicMessages
+                : (selectedUser ? privateChats[selectedUser.userId] || [] : []);
+
+            const messagesHtml = currentMessages.map(msg => {
+                const isOwn = msg.senderId === user.userId;
+                return `
+                <div class="flex ${isOwn ? 'justify-end' : 'justify-start'}">
+                    <div class="max-w-xs lg:max-w-md ${isOwn ? 'bg-purple-600 text-white' : 'bg-white'} rounded-lg px-4 py-2 shadow">
+                        ${!isOwn ? `<div class="text-xs font-semibold mb-1 ${isOwn ? 'text-purple-200' : 'text-gray-600'}">${msg.senderName}</div>` : ''}
+                        <div>${msg.content}</div>
+                        <div class="text-xs mt-1 ${isOwn ? 'text-purple-200' : 'text-gray-500'}">
+                            ${new Date(msg.createdAt).toLocaleTimeString()}
+                        </div>
+                    </div>
+                </div>
+            `;
+            }).join('');
+
+            const messagesDiv = document.getElementById('messages');
+            if (messagesDiv) {
+                messagesDiv.innerHTML = messagesHtml;
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            }
+        }
+    </script>
 </body>
 
 </html>

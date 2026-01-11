@@ -11,8 +11,6 @@ public class User {
 
     private String username;
 
-    // private String email;
-
     // TODO: review how this annotation work
     @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     private String password;

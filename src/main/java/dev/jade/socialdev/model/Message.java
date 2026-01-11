@@ -6,11 +6,11 @@ import java.time.Instant;
 
 @Data
 public class Message {
+    private Long messageId;
+    private Long senderId;
     private String senderName;
-    private Long userId;
-    private String recipientName;
     private Long recipientId;
+    private String recipientName;
     private String content;
-    private Instant date;
-    private Status status;
+    private Instant createdAt;
 }
