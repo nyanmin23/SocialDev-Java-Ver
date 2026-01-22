@@ -1,5 +1,9 @@
-package dev.jade.socialdev.exception;
+package dev.jade.socialdev.exception.handler;
 
+import dev.jade.socialdev.exception.InvalidCredentialsException;
+import dev.jade.socialdev.exception.UnauthorizedAccessException;
+import dev.jade.socialdev.exception.UserNotFoundException;
+import dev.jade.socialdev.exception.UsernameAlreadyTakenException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
