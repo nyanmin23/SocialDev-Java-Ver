@@ -14,20 +14,20 @@
     <div id="app"></div>
 
     <script>
-        // ===== CONFIGURATION =====
         const API_URL = 'http://localhost:8080/api';
         const WS_URL = 'http://localhost:8080/ws-socialdev';
         const MAX_MESSAGE_LENGTH = 1000;
 
-        // ===== CACHED DOM ELEMENTS =====
-        const appElement = document.getElementById('app');
-
-        // ===== APPLICATION STATE =====
+        // Application State
         const AppState = {
             user: null,
             stompClient: null,
+            publicMessages: [],
+            privateChats: {},
+            users: [],
             selectedUser: null,
-            isPrivateMode: false,
+            activeTab: null,
+            isConnecting: false,
 
             setUser(newUser) {
                 this.user = newUser;
@@ -53,40 +53,44 @@
                 return this.user;
             },
 
-            clear() {
+            getCachedUsers() {
+                try {
+                    const cached = localStorage.getItem('socialdev_users');
+                    if (cached) {
+                        return JSON.parse(cached);
+                    }
+                } catch (e) {
+                    console.error('Failed to parse cached users:', e);
+                }
+                return [];
+            },
+
+            setCachedUsers(userList) {
+                try {
+                    localStorage.setItem('socialdev_users', JSON.stringify(userList));
+                } catch (e) {
+                    console.error('Failed to cache users:', e);
+                }
+            },
+
+            reset() {
+                if (this.stompClient) {
+                    this.stompClient.disconnect();
+                }
                 this.user = null;
                 this.stompClient = null;
+                this.publicMessages = [];
+                this.privateChats = {};
+                this.users = [];
                 this.selectedUser = null;
-                this.isPrivateMode = false;
+                this.activeTab = null;
+                this.isConnecting = false;
                 localStorage.removeItem('socialdev_user');
+                localStorage.removeItem('socialdev_users');
             }
         };
 
-        // ===== API UTILITIES =====
-        async function apiCall(endpoint, options = {}) {
-            try {
-                const response = await fetch(`${API_URL}${endpoint}`, {
-                    headers: {
-                        'Content-Type': 'application/json',
-                        ...options.headers
-                    },
-                    credentials: 'include',
-                    ...options
-                });
-
-                if (!response.ok) {
-                    const error = await response.json().catch(() => ({ message: 'Request failed' }));
-                    throw new Error(error.message || `HTTP ${response.status}`);
-                }
-
-                return await response.json();
-            } catch (error) {
-                console.error(`API Error [${endpoint}]:`, error);
-                throw error;
-            }
-        }
-
-        // ===== UTILITY FUNCTIONS =====
+        // Utility Functions
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
@@ -94,463 +98,545 @@
         }
 
         function validateAuthInput(username, password) {
-            const trimmedUsername = username.trim();
-            const trimmedPassword = password.trim();
-
-            if (!trimmedUsername || !trimmedPassword) {
-                throw new Error('Username and password are required');
+            if (!username || username.trim().length < 3) {
+                throw new Error("Username must be at least 3 characters");
             }
-
-            if (trimmedUsername.length < 3) {
-                throw new Error('Username must be at least 3 characters');
+            if (username.length > 20) {
+                throw new Error("Username must be at most 20 characters");
             }
-
-            if (trimmedPassword.length < 6) {
-                throw new Error('Password must be at least 6 characters');
+            if (!password || password.length < 5) {
+                throw new Error("Password must be at least 5 characters");
             }
-
-            return { username: trimmedUsername, password: trimmedPassword };
         }
 
         function validateMessageContent(content) {
-            const trimmed = content.trim();
-
-            if (!trimmed) {
-                throw new Error('Message cannot be empty');
+            if (!content || content.trim().length === 0) {
+                throw new Error("Message cannot be empty");
             }
-
-            if (trimmed.length > MAX_MESSAGE_LENGTH) {
-                throw new Error(`Message too long (max ${MAX_MESSAGE_LENGTH} characters)`);
+            if (content.length > MAX_MESSAGE_LENGTH) {
+                throw new Error(`Message cannot exceed ${MAX_MESSAGE_LENGTH} characters`);
             }
-
-            return trimmed;
         }
 
         function showLoading(message = 'Loading...') {
-            appElement.innerHTML = `
-                <div class="min-h-screen flex items-center justify-center">
+            document.getElementById('app').innerHTML = `
+                <div class="min-h-screen flex items-center justify-center bg-gray-100">
                     <div class="text-center">
-                        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
-                        <p class="text-gray-600">${escapeHtml(message)}</p>
+                        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600 mx-auto"></div>
+                        <p class="mt-4 text-gray-600">${escapeHtml(message)}</p>
                     </div>
                 </div>
             `;
         }
 
-        function showError(message) {
-            const errorDiv = document.createElement('div');
-            errorDiv.className = 'fixed top-4 right-4 bg-red-500 text-white px-6 py-3 rounded-lg shadow-lg z-50';
-            errorDiv.textContent = message;
-            document.body.appendChild(errorDiv);
-
-            setTimeout(() => errorDiv.remove(), 5000);
+        function showError(message, onRetry) {
+            document.getElementById('app').innerHTML = `
+                <div class="min-h-screen flex items-center justify-center bg-gray-100">
+                    <div class="text-center max-w-md">
+                        <div class="text-red-600 text-6xl mb-4">⚠️</div>
+                        <p class="text-gray-800 text-lg mb-4">${escapeHtml(message)}</p>
+                        ${onRetry ? `
+                            <button onclick="(${onRetry})()" 
+                                class="bg-purple-600 text-white px-6 py-2 rounded-lg hover:bg-purple-700 transition">
+                                Retry
+                            </button>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
         }
 
-        function showSuccess(message) {
-            const successDiv = document.createElement('div');
-            successDiv.className = 'fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg z-50';
-            successDiv.textContent = message;
-            document.body.appendChild(successDiv);
-
-            setTimeout(() => successDiv.remove(), 3000);
-        }
-
-        // ===== WEBSOCKET FUNCTIONS =====
-        async function connectWebSocket() {
-            const user = AppState.getUser();
-            if (!user || AppState.stompClient) return;
-
-            return new Promise((resolve, reject) => {
-                const socket = new SockJS(WS_URL);
-                const client = Stomp.over(socket);
-
-                client.connect({},
-                    () => {
-                        AppState.stompClient = client;
-
-                        // Subscribe to public messages
-                        client.subscribe('/topic/public', (message) => {
-                            const msg = JSON.parse(message.body);
-                            displayMessage(msg, false);
-                        });
-
-                        // Subscribe to private messages
-                        client.subscribe(`/queue/private`, (message) => {
-                            const msg = JSON.parse(message.body);
-                            displayMessage(msg, true);
-                        });
-
-                        resolve(client);
-                    },
-                    (error) => {
-                        console.error('WebSocket connection error:', error);
-                        reject(error);
-                    }
-                );
-            });
-        }
-
-        function displayMessage(message, isPrivate) {
-            const user = AppState.getUser();
-            const messagesContainer = document.getElementById('messages-container');
-
-            if (!messagesContainer) return;
-
-            // Check if this message belongs to current conversation
-            if (isPrivate) {
-                const inConversation = (
-                    (AppState.selectedUser &&
-                        (message.senderName === AppState.selectedUser.username ||
-                            message.recipientName === AppState.selectedUser.username))
-                );
-                if (!inConversation) return;
+        // Initialize Application
+        window.onload = () => {
+            const savedUser = AppState.getUser();
+            if (savedUser) {
+                const cachedUsers = AppState.getCachedUsers();
+                if (cachedUsers.length > 0) {
+                    AppState.users = cachedUsers.filter(u => u.userId !== savedUser.userId);
+                }
+                connectWebSocket();
             } else {
-                if (AppState.isPrivateMode) return;
-            }
-
-            const isOwn = message.senderName === user.username;
-            messagesContainer.innerHTML += createMessageHTML(message, isOwn);
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-        }
-
-        // ===== TEMPLATE FUNCTIONS =====
-        function createMessageHTML(message, isOwn) {
-            const alignment = isOwn ? 'justify-end' : 'justify-start';
-            const bgColor = isOwn ? 'bg-blue-500 text-white' : 'bg-white';
-
-            return `
-                <div class="flex ${alignment} mb-4">
-                    <div class="${bgColor} rounded-lg p-3 max-w-xs lg:max-w-md shadow">
-                        <p class="font-semibold text-sm mb-1">${escapeHtml(message.senderName)}</p>
-                        <p class="break-words">${escapeHtml(message.content)}</p>
-                        <p class="text-xs opacity-75 mt-1">
-                            ${new Date(message.createdAt).toLocaleTimeString()}
-                        </p>
-                    </div>
-                </div>
-            `;
-        }
-
-        function createUserListItemHTML(user, isSelected) {
-            const currentUser = AppState.getUser();
-            if (user.username === currentUser.username) return '';
-
-            const activeClass = isSelected ? 'bg-blue-100 border-blue-500' : 'hover:bg-gray-50';
-
-            return `
-                <li class="border-b last:border-b-0">
-                    <button 
-                        onclick="selectUser(${user.id}, '${escapeHtml(user.username)}')"
-                        class="w-full text-left px-4 py-3 transition ${activeClass} border-l-4 border-transparent">
-                        <span class="font-medium">${escapeHtml(user.username)}</span>
-                    </button>
-                </li>
-            `;
-        }
-
-        function createAuthFormHTML(isLogin) {
-            const title = isLogin ? 'Login' : 'Register';
-            const switchText = isLogin ? "Don't have an account?" : 'Already have an account?';
-            const switchAction = isLogin ? 'Register' : 'Login';
-
-            return `
-                <div class="min-h-screen flex items-center justify-center p-4">
-                    <div class="bg-white rounded-lg shadow-xl p-8 w-full max-w-md">
-                        <h1 class="text-3xl font-bold text-center mb-8 text-gray-800">SocialDev Chat</h1>
-
-                        <form id="auth-form" class="space-y-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-1">Username</label>
-                                <input 
-                                    type="text" 
-                                    id="username" 
-                                    required
-                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                    placeholder="Enter username">
-                            </div>
-
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-1">Password</label>
-                                <input 
-                                    type="password" 
-                                    id="password" 
-                                    required
-                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                    placeholder="Enter password">
-                            </div>
-
-                            <button 
-                                type="submit" 
-                                class="w-full bg-blue-500 text-white py-2 rounded-lg hover:bg-blue-600 transition font-medium">
-                                ${title}
-                            </button>
-                        </form>
-
-                        <div class="mt-4 text-center">
-                            <span class="text-gray-600">${switchText}</span>
-                            <button 
-                                onclick="switchAuthMode()" 
-                                class="text-blue-500 hover:text-blue-600 font-medium ml-1">
-                                ${switchAction}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-
-        function createChatInterfaceHTML() {
-            const user = AppState.getUser();
-            const chatTitle = AppState.isPrivateMode && AppState.selectedUser
-                ? `Chat with ${escapeHtml(AppState.selectedUser.username)}`
-                : 'Public Chat';
-
-            return `
-                <div class="flex h-screen bg-gray-100">
-                    <!-- Sidebar -->
-                    <div class="w-80 bg-white border-r border-gray-200 flex flex-col">
-                        <div class="p-4 border-b border-gray-200 bg-blue-500 text-white">
-                            <h2 class="text-xl font-bold">SocialDev Chat</h2>
-                            <p class="text-sm opacity-90">${escapeHtml(user.username)}</p>
-                        </div>
-
-                        <div class="flex-1 overflow-y-auto">
-                            <button 
-                                onclick="switchToPublic()"
-                                class="w-full text-left px-4 py-3 border-b hover:bg-gray-50 transition ${!AppState.isPrivateMode ? 'bg-blue-100' : ''}">
-                                <span class="font-medium">📢 Public Chat</span>
-                            </button>
-
-                            <div class="p-2 bg-gray-50 border-b">
-                                <h3 class="text-sm font-semibold text-gray-600 px-2">Private Chats</h3>
-                            </div>
-
-                            <ul id="users-list"></ul>
-                        </div>
-
-                        <div class="p-4 border-t border-gray-200">
-                            <button 
-                                onclick="logout()"
-                                class="w-full bg-red-500 text-white py-2 rounded-lg hover:bg-red-600 transition">
-                                Logout
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- Chat Area -->
-                    <div class="flex-1 flex flex-col">
-                        <div class="bg-white border-b border-gray-200 px-6 py-4">
-                            <h2 class="text-xl font-semibold text-gray-800">${chatTitle}</h2>
-                        </div>
-
-                        <div id="messages-container" class="flex-1 overflow-y-auto p-6 space-y-4"></div>
-
-                        <div class="bg-white border-t border-gray-200 p-4">
-                            <form id="message-form" class="flex gap-2">
-                                <input 
-                                    type="text" 
-                                    id="message-input" 
-                                    placeholder="Type a message..."
-                                    class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                    maxlength="${MAX_MESSAGE_LENGTH}">
-                                <button 
-                                    type="submit" 
-                                    class="bg-blue-500 text-white px-6 py-2 rounded-lg hover:bg-blue-600 transition font-medium">
-                                    Send
-                                </button>
-                            </form>
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-
-        // ===== AUTHENTICATION =====
-        let isLoginMode = true;
-
-        async function handleAuth(event) {
-            event.preventDefault();
-
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
-
-            try {
-                const { username: validUsername, password: validPassword } = validateAuthInput(username, password);
-
-                showLoading(isLoginMode ? 'Logging in...' : 'Registering...');
-
-                const endpoint = isLoginMode ? '/auth/login' : '/auth/register';
-                const user = await apiCall(endpoint, {
-                    method: 'POST',
-                    body: JSON.stringify({ username: validUsername, password: validPassword })
-                });
-
-                AppState.setUser(user);
-                showSuccess(isLoginMode ? 'Logged in successfully!' : 'Registered successfully!');
-                await initializeChat();
-
-            } catch (error) {
-                showError(error.message);
                 renderAuth();
             }
-        }
 
-        function switchAuthMode() {
-            isLoginMode = !isLoginMode;
-            renderAuth();
-        }
+            // Global event delegation for Enter key
+            document.addEventListener('keypress', handleGlobalKeyPress);
+        };
 
-        // ===== CHAT FUNCTIONS =====
-        async function initializeChat() {
-            try {
-                showLoading('Connecting to chat...');
-
-                await connectWebSocket();
-                await loadUsers();
-                await loadPublicMessages();
-
-                renderChat();
-                setupChatListeners();
-
-            } catch (error) {
-                showError('Failed to initialize chat');
-                console.error(error);
-                logout();
+        function handleGlobalKeyPress(e) {
+            if (e.key === 'Enter') {
+                const target = e.target;
+                if (target.id === 'messageInput') {
+                    sendMessage();
+                } else if (target.id === 'password') {
+                    const authBtn = document.getElementById('authBtn');
+                    if (authBtn) authBtn.click();
+                }
             }
         }
 
+        // WebSocket Connection
+        function connectWebSocket() {
+            if (AppState.isConnecting) return;
+
+            AppState.isConnecting = true;
+            showLoading('Connecting to chat...');
+
+            const socket = new SockJS(WS_URL);
+            AppState.stompClient = Stomp.over(socket);
+
+            // Disable debug logging
+            AppState.stompClient.debug = null;
+
+            AppState.stompClient.connect({}, onWebSocketConnect, onWebSocketError);
+        }
+
+        async function onWebSocketConnect() {
+            console.log('Connected to WebSocket');
+            AppState.isConnecting = false;
+
+            try {
+                await Promise.all([loadPublicMessages(), loadUsers()]);
+
+                renderChat();
+
+                // Subscribe to public messages
+                AppState.stompClient.subscribe('/topic/public', (message) => {
+                    try {
+                        const msg = JSON.parse(message.body);
+                        AppState.publicMessages.push(msg);
+                        if (AppState.activeTab === 'public') {
+                            renderMessages();
+                        }
+                    } catch (e) {
+                        console.error('Failed to parse public message:', e);
+                    }
+                });
+
+                // Subscribe to private messages
+                AppState.stompClient.subscribe('/user/queue/private', (message) => {
+                    try {
+                        const msg = JSON.parse(message.body);
+                        const otherUserId = msg.senderId === AppState.user.userId
+                            ? msg.recipientId
+                            : msg.senderId;
+
+                        if (!AppState.privateChats[otherUserId]) {
+                            AppState.privateChats[otherUserId] = [];
+                        }
+                        AppState.privateChats[otherUserId].push(msg);
+
+                        if (AppState.activeTab === 'private' &&
+                            AppState.selectedUser &&
+                            AppState.selectedUser.userId === otherUserId) {
+                            renderMessages();
+                        }
+                    } catch (e) {
+                        console.error('Failed to parse private message:', e);
+                    }
+                });
+
+            } catch (error) {
+                console.error('Failed to initialize chat:', error);
+                showError('Failed to load chat data', connectWebSocket);
+            }
+        }
+
+        function onWebSocketError(error) {
+            console.error('WebSocket connection error:', error);
+            AppState.isConnecting = false;
+            showError('Connection failed. Please check your network.', connectWebSocket);
+        }
+
+        // Authentication
+        async function handleAuth(isLogin) {
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+            const errorDiv = document.getElementById('error');
+
+            errorDiv.textContent = '';
+
+            try {
+                validateAuthInput(username, password);
+
+                const endpoint = isLogin ? '/auth/login' : '/auth/register';
+                const response = await fetch(`${API_URL}${endpoint}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ username, password })
+                });
+
+                if (!response.ok) {
+                    const data = await response.json();
+                    throw new Error(data.message || (isLogin ? 'Login failed' : 'Registration failed'));
+                }
+
+                const user = await response.json();
+                AppState.setUser(user);
+                AppState.activeTab = null;
+                AppState.selectedUser = null;
+
+                connectWebSocket();
+            } catch (err) {
+                errorDiv.textContent = err.message;
+            }
+        }
+
+        function switchAuthMode(isLogin) {
+            const loginBtn = document.getElementById('loginBtn');
+            const registerBtn = document.getElementById('registerBtn');
+            const authBtn = document.getElementById('authBtn');
+            const errorDiv = document.getElementById('error');
+
+            errorDiv.textContent = '';
+
+            if (isLogin) {
+                loginBtn.className = "flex-1 py-2 rounded-lg font-semibold transition bg-purple-600 text-white";
+                registerBtn.className = "flex-1 py-2 rounded-lg font-semibold transition bg-gray-200 text-gray-700";
+                authBtn.textContent = "Login";
+                authBtn.onclick = () => handleAuth(true);
+            } else {
+                loginBtn.className = "flex-1 py-2 rounded-lg font-semibold transition bg-gray-200 text-gray-700";
+                registerBtn.className = "flex-1 py-2 rounded-lg font-semibold transition bg-purple-600 text-white";
+                authBtn.textContent = "Register";
+                authBtn.onclick = () => handleAuth(false);
+            }
+        }
+
+        // Data Loading
         async function loadPublicMessages() {
             try {
-                const messages = await apiCall('/messages/public');
-                const container = document.getElementById('messages-container');
-                if (container) {
-                    const user = AppState.getUser();
-                    container.innerHTML = messages
-                        .map(msg => createMessageHTML(msg, msg.senderName === user.username))
-                        .join('');
-                    container.scrollTop = container.scrollHeight;
+                const response = await fetch(`${API_URL}/messages/public`, {
+                    credentials: 'include'
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to load public messages');
                 }
-            } catch (error) {
-                showError('Failed to load messages');
+
+                AppState.publicMessages = await response.json();
+            } catch (err) {
+                console.error('Failed to load public messages:', err);
+                AppState.publicMessages = [];
             }
         }
 
         async function loadUsers() {
             try {
-                const users = await apiCall('/users');
-                const usersList = document.getElementById('users-list');
-                if (usersList) {
-                    const selectedId = AppState.selectedUser?.id;
-                    usersList.innerHTML = users
-                        .map(user => createUserListItemHTML(user, user.id === selectedId))
-                        .join('');
+                const response = await fetch(`${API_URL}/users`, {
+                    credentials: 'include'
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to load users');
                 }
-            } catch (error) {
-                showError('Failed to load users');
+
+                const allUsers = await response.json();
+                AppState.users = allUsers.filter(u => u.userId !== AppState.user.userId);
+                AppState.setCachedUsers(AppState.users);
+            } catch (err) {
+                console.error('Failed to load users:', err);
+                const cached = AppState.getCachedUsers();
+                AppState.users = cached.filter(u => u.userId !== AppState.user.userId);
             }
         }
 
         async function loadPrivateMessages(recipientId) {
             try {
-                const messages = await apiCall(`/messages/private/${recipientId}`);
-                const container = document.getElementById('messages-container');
-                if (container) {
-                    const user = AppState.getUser();
-                    container.innerHTML = messages
-                        .map(msg => createMessageHTML(msg, msg.senderName === user.username))
-                        .join('');
-                    container.scrollTop = container.scrollHeight;
+                const response = await fetch(`${API_URL}/messages/private/${recipientId}`, {
+                    credentials: 'include'
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to load private messages');
                 }
-            } catch (error) {
-                showError('Failed to load conversation');
+
+                AppState.privateChats[recipientId] = await response.json();
+            } catch (err) {
+                console.error('Failed to load private messages:', err);
+                AppState.privateChats[recipientId] = [];
             }
         }
 
-        function sendMessage(event) {
-            event.preventDefault();
+        // Messaging
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            if (!input) return;
 
-            const input = document.getElementById('message-input');
-            const content = input.value;
+            const content = input.value.trim();
 
             try {
-                const validContent = validateMessageContent(content);
+                validateMessageContent(content);
 
-                if (!AppState.stompClient) {
-                    throw new Error('Not connected to chat');
+                if (!AppState.stompClient || !AppState.stompClient.connected) {
+                    throw new Error('Not connected to chat server. Please refresh the page.');
                 }
 
-                const message = {
-                    content: validContent,
-                    recipientId: AppState.isPrivateMode && AppState.selectedUser
-                        ? AppState.selectedUser.id
-                        : null
-                };
-
-                const destination = AppState.isPrivateMode ? '/app/private-message' : '/app/message';
-                AppState.stompClient.send(destination, {}, JSON.stringify(message));
+                if (AppState.activeTab === 'public') {
+                    AppState.stompClient.send('/app/message', {}, JSON.stringify({ content }));
+                } else if (AppState.selectedUser) {
+                    AppState.stompClient.send('/app/private-message', {}, JSON.stringify({
+                        content,
+                        recipientId: AppState.selectedUser.userId
+                    }));
+                }
 
                 input.value = '';
-                input.focus();
-
-            } catch (error) {
-                showError(error.message);
+            } catch (err) {
+                alert(err.message);
             }
-        }
-
-        async function selectUser(userId, username) {
-            AppState.selectedUser = { id: userId, username };
-            AppState.isPrivateMode = true;
-
-            await loadPrivateMessages(userId);
-            renderChat();
-            setupChatListeners();
-        }
-
-        async function switchToPublic() {
-            AppState.selectedUser = null;
-            AppState.isPrivateMode = false;
-
-            await loadPublicMessages();
-            renderChat();
-            setupChatListeners();
         }
 
         function logout() {
-            if (AppState.stompClient) {
-                AppState.stompClient.disconnect();
+            if (confirm('Are you sure you want to logout?')) {
+                AppState.reset();
+                renderAuth();
             }
-            AppState.clear();
-            isLoginMode = true;
-            renderAuth();
         }
 
-        // ===== RENDER FUNCTIONS =====
+        async function selectUser(u) {
+            AppState.selectedUser = u;
+            AppState.activeTab = 'private';
+
+            renderChat();
+
+            if (!AppState.privateChats[u.userId]) {
+                await loadPrivateMessages(u.userId);
+                renderMessages();
+            }
+        }
+
+        function switchToPublic() {
+            AppState.activeTab = 'public';
+            AppState.selectedUser = null;
+            renderChat();
+        }
+
+        // Rendering Functions
         function renderAuth() {
-            appElement.innerHTML = createAuthFormHTML(isLoginMode);
-            document.getElementById('auth-form').addEventListener('submit', handleAuth);
+            document.getElementById('app').innerHTML = `
+                <div class="min-h-screen bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center p-4">
+                    <div class="bg-white rounded-lg shadow-2xl p-8 w-full max-w-md">
+                        <h1 class="text-3xl font-bold text-center mb-6 text-gray-800">SocialDev Chat</h1>
+
+                        <div class="flex gap-2 mb-6" role="tablist" aria-label="Authentication mode">
+                            <button 
+                                onclick="switchAuthMode(true)" 
+                                id="loginBtn" 
+                                role="tab"
+                                aria-selected="true"
+                                aria-controls="auth-panel"
+                                class="flex-1 py-2 rounded-lg font-semibold transition bg-purple-600 text-white">
+                                Login
+                            </button>
+                            <button 
+                                onclick="switchAuthMode(false)" 
+                                id="registerBtn"
+                                role="tab"
+                                aria-selected="false"
+                                aria-controls="auth-panel"
+                                class="flex-1 py-2 rounded-lg font-semibold transition bg-gray-200 text-gray-700">
+                                Register
+                            </button>
+                        </div>
+
+                        <div id="auth-panel" role="tabpanel" class="space-y-4">
+                            <input 
+                                type="text" 
+                                id="username" 
+                                placeholder="Username (3-20 characters)"
+                                aria-label="Username"
+                                autocomplete="username"
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-600">
+
+                            <input 
+                                type="password" 
+                                id="password" 
+                                placeholder="Password (minimum 5 characters)"
+                                aria-label="Password"
+                                autocomplete="current-password"
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-600">
+
+                            <div 
+                                id="error" 
+                                role="alert" 
+                                aria-live="polite"
+                                class="text-red-600 text-sm min-h-[20px]"></div>
+
+                            <button 
+                                id="authBtn" 
+                                onclick="handleAuth(true)" 
+                                class="w-full bg-purple-600 text-white py-2 rounded-lg font-semibold hover:bg-purple-700 transition focus:outline-none focus:ring-2 focus:ring-purple-600 focus:ring-offset-2">
+                                Login
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
         }
 
         function renderChat() {
-            appElement.innerHTML = createChatInterfaceHTML();
+            const usersHtml = AppState.users.map(u => `
+                <button 
+                    onclick='selectUser(${JSON.stringify(u).replace(/'/g, "&#39;")})'
+                    role="button"
+                    aria-label="Chat with ${escapeHtml(u.username)}"
+                    class="w-full text-left px-3 py-2 rounded-lg mb-1 transition focus:outline-none focus:ring-2 focus:ring-purple-600 ${AppState.selectedUser?.userId === u.userId && AppState.activeTab === 'private'
+                    ? 'bg-purple-100 text-purple-700'
+                    : 'hover:bg-gray-100'
+                }">
+                    <div class="flex items-center gap-2">
+                        <div class="w-2 h-2 bg-green-500 rounded-full" aria-hidden="true"></div>
+                        ${escapeHtml(u.username)}
+                    </div>
+                </button>
+            `).join('');
+
+            const showInput = AppState.activeTab === 'public' || AppState.selectedUser;
+
+            document.getElementById('app').innerHTML = `
+                <div class="h-screen bg-gray-100 flex overflow-hidden">
+                    <!-- Sidebar -->
+                    <aside class="w-64 bg-white border-r border-gray-200 flex flex-col shrink-0" aria-label="Sidebar navigation">
+                        <div class="p-4 border-b border-gray-200 shrink-0">
+                            <h2 class="text-xl font-bold text-gray-800">SocialDev</h2>
+                            <p class="text-sm text-gray-600">@${escapeHtml(AppState.user?.username || '...')}</p>
+                            <button 
+                                onclick="logout()" 
+                                class="mt-2 w-full bg-red-500 text-white py-1 rounded text-sm hover:bg-red-600 transition focus:outline-none focus:ring-2 focus:ring-red-500"
+                                aria-label="Logout">
+                                Logout
+                            </button>
+                        </div>
+
+                        <div class="p-4 border-b border-gray-200 shrink-0">
+                            <button 
+                                onclick="switchToPublic()" 
+                                role="button"
+                                aria-label="Public chat room"
+                                class="w-full text-left px-3 py-2 rounded-lg font-medium transition focus:outline-none focus:ring-2 focus:ring-purple-600 ${AppState.activeTab === 'public'
+                    ? 'bg-purple-100 text-purple-700'
+                    : 'hover:bg-gray-100'
+                }">
+                                # Public Chat
+                            </button>
+                        </div>
+
+                        <div class="flex-1 overflow-y-auto min-h-0">
+                            <div class="p-4">
+                                <h3 class="text-xs font-semibold text-gray-500 uppercase mb-2">Direct Messages</h3>
+                                <nav aria-label="User list">
+                                    ${usersHtml || '<p class="text-sm text-gray-500 px-3">No users online</p>'}
+                                </nav>
+                            </div>
+                        </div>
+                    </aside>
+
+                    <!-- Main Chat Area -->
+                    <main class="flex-1 flex flex-col min-h-0 min-w-0" role="main">
+                        <header class="bg-white border-b border-gray-200 p-4 shrink-0">
+                            <h2 class="text-xl font-bold text-gray-800">
+                                ${AppState.activeTab === 'public'
+                    ? '# Public Chat'
+                    : (AppState.selectedUser
+                        ? `@ ${escapeHtml(AppState.selectedUser.username)}`
+                        : 'Select a chat to start messaging')
+                }
+                            </h2>
+                        </header>
+
+                        <div 
+                            id="messages" 
+                            role="log" 
+                            aria-live="polite" 
+                            aria-relevant="additions"
+                            class="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+                        </div>
+
+                        <footer class="bg-white border-t border-gray-200 p-4 shrink-0">
+                            ${showInput
+                    ? `
+                                    <div class="flex gap-2">
+                                        <input 
+                                            type="text" 
+                                            id="messageInput" 
+                                            placeholder="Type a message..."
+                                            aria-label="Message input"
+                                            maxlength="${MAX_MESSAGE_LENGTH}"
+                                            class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-600">
+                                        <button 
+                                            onclick="sendMessage()" 
+                                            aria-label="Send message"
+                                            class="bg-purple-600 text-white px-6 py-2 rounded-lg font-semibold hover:bg-purple-700 transition focus:outline-none focus:ring-2 focus:ring-purple-600">
+                                            Send
+                                        </button>
+                                    </div>
+                                `
+                    : `
+                                    <div class="text-center text-gray-500 py-8">
+                                        Please select a chat (Public or a user) to start messaging.
+                                    </div>
+                                `
+                }
+                        </footer>
+                    </main>
+                </div>
+            `;
+
+            renderMessages();
         }
 
-        function setupChatListeners() {
-            const messageForm = document.getElementById('message-form');
-            if (messageForm) {
-                messageForm.addEventListener('submit', sendMessage);
+        function renderMessages() {
+            const currentMessages = AppState.activeTab === 'public'
+                ? AppState.publicMessages
+                : (AppState.selectedUser ? AppState.privateChats[AppState.selectedUser.userId] || [] : []);
+
+            const messagesHtml = currentMessages.map(msg => {
+                const isOwn = msg.senderId === AppState.user.userId;
+                const timestamp = new Date(msg.createdAt).toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+
+                return `
+                    <div class="flex ${isOwn ? 'justify-end' : 'justify-start'}" role="article" aria-label="Message from ${escapeHtml(msg.senderName)}">
+                        <div class="max-w-xs lg:max-w-md ${isOwn ? 'bg-purple-600 text-white' : 'bg-white'
+                    } rounded-lg px-4 py-2 shadow">
+                            ${!isOwn
+                        ? `<div class="text-xs font-semibold mb-1 text-gray-600">
+                                    ${escapeHtml(msg.senderName)}
+                                   </div>`
+                        : ''
+                    }
+                            <div class="break-words">${escapeHtml(msg.content)}</div>
+                            <div class="text-xs mt-1 ${isOwn ? 'text-purple-200' : 'text-gray-500'}">
+                                ${timestamp}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            const messagesDiv = document.getElementById('messages');
+            if (messagesDiv) {
+                if (messagesHtml) {
+                    messagesDiv.innerHTML = messagesHtml;
+                } else {
+                    messagesDiv.innerHTML = `
+                        <div class="text-center text-gray-500 py-8">
+                            ${AppState.activeTab === 'public'
+                            ? 'No messages yet. Be the first to say something!'
+                            : 'No messages yet. Start the conversation!'}
+                        </div>
+                    `;
+                }
+
+                requestAnimationFrame(() => {
+                    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                });
             }
         }
-
-        // ===== INITIALIZATION =====
-        (async function init() {
-            const user = AppState.getUser();
-
-            if (user) {
-                await initializeChat();
-            } else {
-                renderAuth();
-            }
-        })();
     </script>
 </body>
 

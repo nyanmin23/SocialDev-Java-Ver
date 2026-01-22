@@ -30,7 +30,11 @@ public class MessageServiceImpl implements MessageService {
         String normalizedContent = validateMessage(incomingMessage);
 
         UserEntity sender = getUserByIdOrThrow(userId, "Sender");
-        UserEntity recipient = getUserByIdOrThrow(incomingMessage.getRecipientId(), "Recipient");
+
+        UserEntity recipient = null;
+        if (incomingMessage.getRecipientId() != null) {
+            recipient = getUserByIdOrThrow(incomingMessage.getRecipientId(), "Recipient");
+        }
 
         MessageEntity saved = messageRepository.save(
                 createMessageEntity(sender, recipient, normalizedContent)
