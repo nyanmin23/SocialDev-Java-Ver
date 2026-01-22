@@ -23,15 +23,15 @@ public class GlobalExceptionHandler {
                 .body(Map.of("message", "Invalid username or password"));
     }
 
-    @ExceptionHandler(UsernameAlreadyTakenException.class)
-    public ResponseEntity<Map<String, String>> handleUsernameTaken(UsernameAlreadyTakenException ex) {
-        return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(Map.of("message", ex.getMessage()));
-    }
-
     @ExceptionHandler(UnauthorizedAccessException.class)
     public ResponseEntity<Map<String, String>> handleUnauthorizedAccess(UnauthorizedAccessException ex) {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(Map.of("message", "Authentication required. Please log in."));
+    }
+
+    @ExceptionHandler(UsernameAlreadyTakenException.class)
+    public ResponseEntity<Map<String, String>> handleUsernameTaken(UsernameAlreadyTakenException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(Map.of("message", ex.getMessage()));
     }
 

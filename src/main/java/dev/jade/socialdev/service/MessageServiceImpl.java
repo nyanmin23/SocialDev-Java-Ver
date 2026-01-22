@@ -8,7 +8,7 @@ import dev.jade.socialdev.model.Message;
 import dev.jade.socialdev.repository.MessageRepository;
 import dev.jade.socialdev.repository.UserRepository;
 import dev.jade.socialdev.service.contract.MessageService;
-import dev.jade.socialdev.utils.MessageMapper;
+import dev.jade.socialdev.util.MessageMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -20,6 +20,7 @@ import java.util.List;
 public class MessageServiceImpl implements MessageService {
 
     private static final int MAX_CONTENT_LENGTH = 1000;
+    private static final String EMPTY_CONTENT_ERROR = "Message content must not be empty";
 
     private final MessageRepository messageRepository;
     private final UserRepository userRepository;
@@ -28,15 +29,8 @@ public class MessageServiceImpl implements MessageService {
     public Message handleMessage(Long userId, IncomingMessage incomingMessage) {
         String normalizedContent = validateMessage(incomingMessage);
 
-        UserEntity sender = userRepository.findById(userId)
-                .orElseThrow(() -> new UserNotFoundException("Sender not found: " + userId));
-
-        UserEntity recipient = null;
-        if (incomingMessage.getRecipientId() != null) {
-            Long recipientId = incomingMessage.getRecipientId();
-            recipient = userRepository.findById(recipientId)
-                    .orElseThrow(() -> new UserNotFoundException("Recipient not found: " + recipientId));
-        }
+        UserEntity sender = getUserByIdOrThrow(userId, "Sender");
+        UserEntity recipient = getUserByIdOrThrow(incomingMessage.getRecipientId(), "Recipient");
 
         MessageEntity saved = messageRepository.save(
                 createMessageEntity(sender, recipient, normalizedContent)
@@ -93,13 +87,9 @@ public class MessageServiceImpl implements MessageService {
      */
     private String validateMessage(IncomingMessage incomingMessage) {
         String content = incomingMessage.getContent();
-        if (content == null) {
-            throw new IllegalArgumentException("Message content must not be empty");
-        }
 
-        content = content.trim();
-        if (content.isEmpty()) {
-            throw new IllegalArgumentException("Message content must not be empty");
+        if ((content == null) || (content.trim().isEmpty())) {
+            throw new IllegalArgumentException(EMPTY_CONTENT_ERROR);
         }
 
         if (content.length() > MAX_CONTENT_LENGTH) {
@@ -107,7 +97,12 @@ public class MessageServiceImpl implements MessageService {
                     "Message length can't exceed " + MAX_CONTENT_LENGTH + " characters"
             );
         }
-
         return content;
     }
+
+    private UserEntity getUserByIdOrThrow(Long userId, String role) {
+        return userRepository.findById(userId)
+                .orElseThrow(() -> new UserNotFoundException(role + " not found: " + userId));
+    }
+
 }

@@ -2,12 +2,12 @@ package dev.jade.socialdev.service;
 
 import dev.jade.socialdev.entity.UserEntity;
 import dev.jade.socialdev.exception.InvalidCredentialsException;
-import dev.jade.socialdev.exception.UserNotFoundException;
 import dev.jade.socialdev.exception.UsernameAlreadyTakenException;
 import dev.jade.socialdev.model.User;
 import dev.jade.socialdev.repository.UserRepository;
 import dev.jade.socialdev.service.contract.AuthService;
-import dev.jade.socialdev.utils.UserMapper;
+import dev.jade.socialdev.service.contract.UserService;
+import dev.jade.socialdev.util.UserMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -20,6 +20,7 @@ public class AuthServiceImpl implements AuthService {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final UserService userService;
 
     @Override
     public User register(String username, String password) {
@@ -33,8 +34,7 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public User login(String username, String password) {
-        UserEntity userEntity = userRepository.findByUsername(username)
-                .orElseThrow(() -> new UserNotFoundException("User not found: " + username));
+        UserEntity userEntity = userService.findByUsernameOrThrow(username);
 
         if (!passwordEncoder.matches(password, userEntity.getPassword())) {
             throw new InvalidCredentialsException("Invalid password");

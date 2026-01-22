@@ -1,4 +1,4 @@
-package dev.jade.socialdev.utils;
+package dev.jade.socialdev.util;
 
 import dev.jade.socialdev.entity.UserEntity;
 import dev.jade.socialdev.model.User;

@@ -1,11 +1,12 @@
 package dev.jade.socialdev.service;
 
+import dev.jade.socialdev.entity.UserEntity;
 import dev.jade.socialdev.exception.UnauthorizedAccessException;
 import dev.jade.socialdev.exception.UserNotFoundException;
 import dev.jade.socialdev.model.User;
 import dev.jade.socialdev.repository.UserRepository;
 import dev.jade.socialdev.service.contract.UserService;
-import dev.jade.socialdev.utils.UserMapper;
+import dev.jade.socialdev.util.UserMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -32,9 +33,12 @@ public class UserServiceImpl implements UserService {
         }
 
         String username = principal.getName();
+        return findByUsernameOrThrow(username).getId();
+    }
+
+    public UserEntity findByUsernameOrThrow(String username) {
         return userRepository.findByUsername(username)
-                .orElseThrow(() -> new UserNotFoundException("User not found: " + username))
-                .getId();
+                .orElseThrow(() -> new UserNotFoundException("User not found: " + username));
     }
 
     @Override

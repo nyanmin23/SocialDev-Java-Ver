@@ -2,8 +2,8 @@ package dev.jade.socialdev.controller;
 
 import dev.jade.socialdev.model.IncomingMessage;
 import dev.jade.socialdev.model.Message;
-import dev.jade.socialdev.service.contract.UserService;
 import dev.jade.socialdev.service.contract.MessageService;
+import dev.jade.socialdev.service.contract.UserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
@@ -28,7 +28,7 @@ public class MessageWebSocketController {
      * Handles public messages sent to all connected users.
      *
      * @param incomingMessage the message from the client
-     * @param principal the authenticated user
+     * @param principal       the authenticated user
      * @return the saved message broadcast to all subscribers
      */
     @MessageMapping("/message")
@@ -42,17 +42,13 @@ public class MessageWebSocketController {
      * Handles private messages sent between two users.
      *
      * @param incomingMessage the message from the client
-     * @param principal the authenticated user
+     * @param principal       the authenticated user
      * @return the saved message
      */
     @MessageMapping("/private-message")
     public Message sendPrivateMessage(@Payload IncomingMessage incomingMessage, Principal principal) {
         Long senderId = userService.getCurrentUserId(principal);
         String senderName = principal.getName();
-
-        if (incomingMessage.getRecipientId() == null) {
-            throw new IllegalArgumentException("recipientId can't be null for private messages");
-        }
 
         Message saved = messageService.handleMessage(senderId, incomingMessage);
 
